@@ -1,152 +1,97 @@
-# file: links_shortener_bot.py
+"""
+Telegram LiteShort Bot for Pydroid 3
+- Sends shortened links using LiteShort API
+- Safe, clean, and handles multiple links
+"""
+
+import os
+import re
 import logging
 import requests
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# --- CONFIG ---
-TELEGRAM_TOKEN = "8182518309:AAFzn_ybY4nWaOOu3-PFSDQE08SYNy5F41U"
-# LITESHORT config - replace with real API details
-LITESHORT_API_URL = "https://liteshort.com/member/tools/api"   # <-- replace
-LITESHORT_API_KEY = "80011abeb528b51241137352d1e54c077760f3ee"                 # <-- replace
+# ----------------- CONFIG -----------------
+# Telegram Bot Token
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '8182518309:AAFzn_ybY4nWaOOu3-PFSDQE08SYNy5F41U')
 
-# Author name for telegra.ph page
-TELEGRAPH_AUTHOR = "LinksBot"
+# LiteShort API
+LITESHORT_API_TOKEN = os.getenv('LITESHORT_API_TOKEN', '80011abeb528b51241137352d1e54c077760f3ee')
+LITESHORT_API_URL = 'https://liteshort.com/member/tools/api'
 
-# Conversation states
-COLLECTING = 1
-
-# --- logging ---
-logging.basicConfig(level=logging.INFO)
+# ----------------- LOGGING -----------------
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# --- helper: create telegra.ph page with links ---
-def create_telegraph_page(title: str, links: list) -> str:
-    """
-    Create a simple telegra.ph page listing links.
-    Returns the telegra.ph URL on success.
-    """
-    # telegra.ph createPage API expects an array of nodes; simplest approach is to send HTML via "content"
-    # But telegraph has a simple createPage endpoint:
-    api = "https://api.telegra.ph/createPage"
-    # Build simple HTML content: paragraphs with anchor tags
-    content_html = ""
-    for idx, link in enumerate(links, start=1):
-        content_html += f'<p>{idx}. <a href="{link}">{link}</a></p>'
-    data = {
-        "access_token": "",  # empty => anonymous page
-        "title": title,
-        "author_name": TELEGRAPH_AUTHOR,
-        "content": content_html,
-        "return_content": False
-    }
-    # telegra.ph accepts POST with form fields
-    resp = requests.post(api, data=data, timeout=15)
-    resp.raise_for_status()
-    j = resp.json()
-    if not j.get("ok"):
-        raise RuntimeError("Telegraph error: " + str(j))
-    url = j["result"]["url"]
-    return url
+# ----------------- URL REGEX -----------------
+# Fixed regex for URLs (safe for Python/Pydroid)
+URL_RE = re.compile(r'(https?://[\w\-._~:/?#\[\]@!$&\'()*+,;=%]+)')
 
-# --- helper: shorten with liteshort (placeholder implementation) ---
-def shorten_with_liteshort(long_url: str) -> str:
-    """
-    Shorten a URL using LITESHORT. Replace with real API details.
-    This function demonstrates a POST with api_key and url; adjust per actual API.
-    """
-    # If you have the exact LITESHORT API, update this section to match their docs.
-    payload = {
-        "api_key": LITESHORT_API_KEY,
-        "url": long_url
-    }
-    headers = {"Content-Type": "application/json"}
-    resp = requests.post(LITESHORT_API_URL, json=payload, headers=headers, timeout=15)
-    resp.raise_for_status()
-    j = resp.json()
-    # Example expected response: { "success": True, "short_url": "https://liteshort.xyz/abc123" }
-    if "short_url" in j:
-        return j["short_url"]
-    # fallback if API differs:
-    if j.get("success") and j.get("short"):
-        return j.get("short")
-    raise RuntimeError("Liteshort API response unexpected: " + str(j))
+# ----------------- FUNCTIONS -----------------
+def find_urls(text: str):
+    """Return list of URLs found in a text"""
+    return URL_RE.findall(text or '')
 
-# --- Conversation handlers ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Salam! /Links command se shuru karein - fir apne links bhejein (ek per line). Jab done ho jaaye, /done bhej dijiye.")
-
-async def links_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['links_buffer'] = []
-    await update.message.reply_text("Okay — ab apne links bhejiye. Har link nayi line me. Jab finished ho to /done bhej dijiyega.")
-    return COLLECTING
-
-async def collect_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    # Extract URLs from the message (simple split by whitespace)
-    parts = text.split()
-    links = [p for p in parts if p.startswith("http://") or p.startswith("https://")]
-    if not links:
-        await update.message.reply_text("Koi valid link nahi mila in that message. Kripya http/https se shuru hone wale links bhejein.")
-        return COLLECTING
-    context.user_data.setdefault('links_buffer', []).extend(links)
-    await update.message.reply_text(f"Added {len(links)} link(s). Total so far: {len(context.user_data['links_buffer'])}. Send more or /done.")
-    return COLLECTING
-
-async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    links = context.user_data.get('links_buffer', [])
-    if not links:
-        await update.message.reply_text("Aapne koi link nahi bheja. /Links se phir shuru karein.")
-        return ConversationHandler.END
-    await update.message.reply_text("Links receive ho gaye. Ab ek single page banake short kar raha hoon...")
-
+def shorten_with_liteshort(url: str) -> str:
+    """Shorten a single URL using LiteShort API"""
     try:
-        # Create telegraph page
-        title = f"Links from @{update.effective_user.username or update.effective_user.id}"
-        page_url = create_telegraph_page(title, links)
-
-        # Shorten using LITESHORT (replace implementation as needed)
-        try:
-            short = shorten_with_liteshort(page_url)
-        except Exception as e:
-            # If liteshort fails, fallback to returning the telegra.ph link
-            logger.exception("Liteshort failed, returning telegra.ph link")
-            await update.message.reply_text(f"Shortening with LITESHORT failed: {e}\nHere's the page link: {page_url}")
-            context.user_data['links_buffer'] = []
-            return ConversationHandler.END
-
-        await update.message.reply_text(f"Aapka single short link yeh raha:\n{short}")
+        response = requests.post(
+            LITESHORT_API_URL,
+            data={'api_token': LITESHORT_API_TOKEN, 'url': url},
+            timeout=10
+        )
+        response.raise_for_status()
+        data = response.json()
+        if data.get('status') == 'success' and 'shortenedUrl' in data:
+            return data['shortenedUrl']
+        else:
+            raise RuntimeError(data.get('message', 'Unknown LiteShort API error'))
+    except requests.RequestException as e:
+        logger.error('Network error for %s: %s', url, e)
+        raise RuntimeError('Network error occurred')
     except Exception as e:
-        logger.exception("Error creating page or shortening")
-        await update.message.reply_text(f"Kuch error hua: {e}")
+        logger.error('Error shortening %s: %s', url, e)
+        raise RuntimeError(str(e))
 
-    context.user_data['links_buffer'] = []
-    return ConversationHandler.END
+# ----------------- TELEGRAM HANDLERS -----------------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Hi! Send me a link and I will shorten it using LiteShort.")
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Cancelled. Agar phir se chahen to /Links bhejein.")
-    context.user_data['links_buffer'] = []
-    return ConversationHandler.END
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Send any URL starting with http:// or https:// and I will shorten it.")
 
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text or ''
+    urls = find_urls(text)
+    if not urls:
+        await update.message.reply_text("No valid URL found. Please send a proper link.")
+        return
+
+    replies = []
+    for url in urls:
+        try:
+            short_url = shorten_with_liteshort(url)
+            replies.append(f"{url} -> {short_url}")
+        except RuntimeError as e:
+            replies.append(f"{url} -> ERROR: {e}")
+
+    await update.message.reply_text("\n".join(replies))
+
+# ----------------- MAIN -----------------
 def main():
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    if TELEGRAM_BOT_TOKEN == 'YOUR_TELEGRAM_BOT_TOKEN_HERE':
+        raise RuntimeError("Set your TELEGRAM_BOT_TOKEN environment variable!")
 
-    conv = ConversationHandler(
-        entry_points=[CommandHandler('Links', links_cmd)],
-        states={
-            COLLECTING: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, collect_links),
-                CommandHandler('done', done),
-            ],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)],
-    )
-
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler('start', start))
-    app.add_handler(conv)
+    app.add_handler(CommandHandler('help', help_cmd))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("Bot started")
+    logger.info("Starting Telegram LiteShort Bot...")
     app.run_polling()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
