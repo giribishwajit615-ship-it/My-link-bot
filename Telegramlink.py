@@ -3,9 +3,9 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # === CONFIG ===
-TOKEN = "8182518309:AAFzn_ybY4nWaOOu3-PFSDQE08SYNy5F41U"       # BotFather se mila token
-ADMIN_ID = 7681308594               # <-- Apna Telegram numeric ID daalo
-API_TOKEN = "80011abeb528b51241137352d1e54c077760f3ee"  # Adrinolinks.in ka API token (niche step-1 me milega)
+TOKEN = "8182518309:AAFzn_ybY4nWaOOu3-PFSDQE08SYNy5F41U"  # BotFather se mila token
+ADMIN_ID = 7681308594                                     # Apna Telegram numeric ID
+API_TOKEN = "80011abeb528b51241137352d1e54c077760f3ee"   # LiteShort API token
 
 # === Helper ===
 def is_admin(user_id):
@@ -13,7 +13,7 @@ def is_admin(user_id):
 
 def shorten_url(long_url):
     """
-    Adrinolinks API call — returns shortened URL or error message.
+    LiteShort API call — returns shortened URL or error message.
     """
     api_url = "https://liteshort.com/member/tools/api"
     params = {
@@ -22,11 +22,12 @@ def shorten_url(long_url):
     }
     try:
         r = requests.get(api_url, params=params, timeout=10)
-        data = r.json()
-        if data.get("status") == "success":
-            return data["shortenedUrl"]
+        r.raise_for_status()  # HTTP error check
+        short_link = r.text.strip()  # JSON nahi, plain text
+        if short_link.startswith("http"):
+            return short_link
         else:
-            return f"⚠️ Error: {data.get('message', 'Unknown error')}"
+            return f"⚠️ Error: {short_link}"
     except Exception as e:
         return f"❌ API Error: {e}"
 
