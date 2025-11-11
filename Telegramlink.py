@@ -5,7 +5,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 # === CONFIG ===
 TOKEN = "8182518309:AAFzn_ybY4nWaOOu3-PFSDQE08SYNy5F41U"       # BotFather se mila token
 ADMIN_ID = 7681308594               # <-- Apna Telegram numeric ID daalo
-API_TOKEN = "5b33540e7eaa148b24b8cca0d9a5e1b9beb3e634"  # Adrinolinks.in ka API token (niche step-1 me milega)
+API_TOKEN = "80011abeb528b51241137352d1e54c077760f3ee"  # Adrinolinks.in ka API token (niche step-1 me milega)
 
 # === Helper ===
 def is_admin(user_id):
