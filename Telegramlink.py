@@ -15,7 +15,7 @@ def shorten_url(long_url):
     """
     Adrinolinks API call — returns shortened URL or error message.
     """
-    api_url = "https://adrinolinks.in/api"
+    api_url = "https://liteshort.com/member/tools/api"
     params = {
         "api": API_TOKEN,
         "url": long_url
