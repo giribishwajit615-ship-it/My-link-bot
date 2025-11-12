@@ -10,6 +10,13 @@ BOT_TOKEN = os.getenv("BOT_TOKEN") or "8182518309:AAFzn_ybY4nWaOOu3-PFSDQE08SYNy
 ADRION_API_TOKEN = os.getenv("ADRION_API_TOKEN") or "5b33540e7eaa148b24b8cca0d9a5e1b9beb3e634"
 ADRION_API_URL = "https://adrinolinks.in/api"
 
+# ---------------- Admin config ----------------
+ADMIN_USER_IDS = [7681308594, 8244432792]  # <-- aap aur aapke dost ke Telegram numeric IDs
+
+def is_admin(user_id: int):
+    return user_id in ADMIN_USER_IDS
+# ---------------------------------------------
+
 def shorten_url(original_url: str):
     try:
         # 1. Try text format
@@ -36,6 +43,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Send me any link, and I’ll shorten it using your AdrinoLinks account!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Sirf admin hi links shorten kar sakte hain.")
+        return
+
     text = update.message.text.strip()
     if text.startswith("http://") or text.startswith("https://"):
         await update.message.reply_text("🔗 Shortening your link... ⏳")
@@ -43,7 +55,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if result["success"]:
             short = result['short_url']
 
-            # Create Opera open button
             keyboard = [[InlineKeyboardButton("🌐 Open in Opera", url=short)]]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
