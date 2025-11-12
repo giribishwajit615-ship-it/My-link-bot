@@ -34,6 +34,15 @@ def init_db():
     conn.commit()
     conn.close()
 
+def cleanup_expired_users():
+    """Auto-remove expired premium users."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    now = datetime.datetime.now()
+    c.execute("DELETE FROM premium WHERE expiry <= ?", (now,))
+    conn.commit()
+    conn.close()
+
 def add_premium_user(user_id: int, duration: str):
     """duration = '7D', '1M', '3M', '6M', '1Y'"""
     days_map = {
@@ -54,9 +63,10 @@ def add_premium_user(user_id: int, duration: str):
     c.execute("REPLACE INTO premium (user_id, expiry) VALUES (?, ?)", (user_id, expiry_date))
     conn.commit()
     conn.close()
-    return True, f"User {user_id} added as premium for {duration}."
+    return True, f"User {user_id} added as premium for {duration} (expires on {expiry_date.strftime('%Y-%m-%d %H:%M:%S')})."
 
 def is_premium_user(user_id: int):
+    cleanup_expired_users()  # Auto remove expired users before checking
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT expiry FROM premium WHERE user_id = ?", (user_id,))
@@ -89,7 +99,10 @@ def shorten_url(original_url: str):
 
 # ---------------- Bot Commands ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Send me any link, and I’ll shorten it using AdrinoLinks.\nAdmins can use /premium to add premium users.")
+    await update.message.reply_text(
+        "👋 Send me any link, and I’ll shorten it using AdrinoLinks.\n"
+        "Admins can use /premium to add premium users."
+    )
 
 async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -98,7 +111,11 @@ async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(context.args) == 0:
-        await update.message.reply_text("Usage:\n`/premium <user_id>-<duration>`\nExample: `/premium 1111111111-7D`", parse_mode="Markdown")
+        await update.message.reply_text(
+            "Usage:\n`/premium <user_id>-<duration>`\nExample: `/premium 1111111111-7D`\n"
+            "Durations: 7D | 1M | 3M | 6M | 1Y",
+            parse_mode="Markdown"
+        )
         return
 
     try:
@@ -111,7 +128,10 @@ async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ok, msg = add_premium_user(target_id, duration)
         await update.message.reply_text("✅ " + msg if ok else "⚠️ " + msg)
     except Exception as e:
-        await update.message.reply_text(f"❌ Invalid format. Example: `/premium 1111111111-1M`\nError: {e}", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"❌ Invalid format. Example: `/premium 1111111111-1M`\nError: {e}",
+            parse_mode="Markdown"
+        )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -140,6 +160,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------- Main ----------------
 def main():
     init_db()
+    cleanup_expired_users()  # Ensure DB clean at start
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
