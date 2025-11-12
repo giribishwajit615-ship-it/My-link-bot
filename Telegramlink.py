@@ -14,9 +14,10 @@ from telegram.ext import (
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "8182518309:AAFzn_ybY4nWaOOu3-PFSDQE08SYNy5F41U"
 ADRION_API_TOKEN = os.getenv("ADRION_API_TOKEN") or "5b33540e7eaa148b24b8cca0d9a5e1b9beb3e634"
 ADRION_API_URL = "https://adrinolinks.in/api"
+ADRION_DOMAIN = "adrinolinks.in"  # your shortener domain
 
 # ---------------- Admin config ----------------
-ADMIN_USER_IDS = [7681308594, 8244432792]  # <-- Add your admin IDs here
+ADMIN_USER_IDS = [7681308594, 8244432792]  # Add your admin IDs
 def is_admin(user_id: int):
     return user_id in ADMIN_USER_IDS
 # ---------------------------------------------
@@ -31,11 +32,14 @@ def init_db():
         user_id INTEGER PRIMARY KEY,
         expiry TIMESTAMP
     )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS links (
+        short_url TEXT PRIMARY KEY,
+        original_url TEXT
+    )""")
     conn.commit()
     conn.close()
 
 def cleanup_expired_users():
-    """Auto-remove expired premium users."""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     now = datetime.datetime.now()
@@ -44,7 +48,6 @@ def cleanup_expired_users():
     conn.close()
 
 def add_premium_user(user_id: int, duration: str):
-    """duration = '7D', '1M', '3M', '6M', '1Y'"""
     days_map = {
         "7D": 7,
         "1M": 30,
@@ -57,7 +60,6 @@ def add_premium_user(user_id: int, duration: str):
         return False, "Invalid duration code!"
 
     expiry_date = datetime.datetime.now() + datetime.timedelta(days=days)
-
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("REPLACE INTO premium (user_id, expiry) VALUES (?, ?)", (user_id, expiry_date))
@@ -66,7 +68,7 @@ def add_premium_user(user_id: int, duration: str):
     return True, f"User {user_id} added as premium for {duration} (expires on {expiry_date.strftime('%Y-%m-%d %H:%M:%S')})."
 
 def is_premium_user(user_id: int):
-    cleanup_expired_users()  # Auto remove expired users before checking
+    cleanup_expired_users()
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT expiry FROM premium WHERE user_id = ?", (user_id,))
@@ -77,31 +79,44 @@ def is_premium_user(user_id: int):
         if expiry > datetime.datetime.now():
             return True
     return False
-# ------------------------------------------------
 
+# ---------------- Adrino Shortener ----------------
 def shorten_url(original_url: str):
     try:
-        text_url = f"{ADRION_API_URL}?api={ADRION_API_TOKEN}&url={requests.utils.quote(original_url)}&format=text"
-        resp = requests.get(text_url, timeout=10)
-        short_link = resp.text.strip()
-        if short_link and short_link.startswith("http"):
-            return {"success": True, "short_url": short_link}
-
-        json_url = f"{ADRION_API_URL}?api={ADRION_API_TOKEN}&url={requests.utils.quote(original_url)}"
-        resp = requests.get(json_url, timeout=10)
-        data = resp.json()
+        api_url = f"{ADRION_API_URL}?api={ADRION_API_TOKEN}&url={requests.utils.quote(original_url)}&format=json"
+        response = requests.get(api_url, timeout=10)
+        data = response.json()
         if data.get("status") == "success":
-            return {"success": True, "short_url": data.get("shortenedUrl")}
+            short = data["shortenedUrl"]
+
+            # save mapping
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute("REPLACE INTO links (short_url, original_url) VALUES (?, ?)", (short, original_url))
+            conn.commit()
+            conn.close()
+
+            return {"success": True, "short_url": short}
         else:
-            return {"success": False, "error": data.get("message", "Unknown error")}
+            return {"success": False, "error": data.get("message", "Adrino API error")}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+def get_original_from_short(short_url: str):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT original_url FROM links WHERE short_url = ?", (short_url,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return row[0]
+    return None
 
 # ---------------- Bot Commands ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Send me any link, and I’ll shorten it using AdrinoLinks.\n"
-        "Admins can use /premium to add premium users."
+        "👋 Send me any link (http/https) to shorten it.\n"
+        "Admins can use /premium <user_id>-<duration> (7D | 1M | 3M | 6M | 1Y)."
     )
 
 async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -133,41 +148,62 @@ async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
+# ---------------- Message Handling ----------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
-    if not (text.startswith("http://") or text.startswith("https://")):
-        await update.message.reply_text("Please send a valid link starting with http:// or https://")
-        return
+    # Case 1: User sends normal link
+    if text.startswith("http://") or text.startswith("https://"):
+        # Check if it's an Adrino short link
+        if ADRION_DOMAIN in text:
+            # If premium → direct file
+            if is_premium_user(user_id):
+                original = get_original_from_short(text)
+                if original:
+                    await update.message.reply_text(
+                        f"🌟 Premium Detected! Direct link:\n{original}"
+                    )
+                    return
+                else:
+                    await update.message.reply_text(
+                        "⚠️ This short link not found in database or not created by bot."
+                    )
+                    return
+            else:
+                # Normal user → get ads link as is
+                await update.message.reply_text(
+                    f"🔗 Normal user detected!\nHere’s your short link:\n{text}\n\n📢 Ads may appear."
+                )
+                return
 
-    # Check if user is premium
-    if is_premium_user(user_id):
-        await update.message.reply_text(f"🌟 Premium User Detected!\nHere’s your direct link:\n{text}")
-        return
-
-    # Otherwise use Adrino shortener
-    await update.message.reply_text("🔗 Shortening your link... ⏳")
-    result = shorten_url(text)
-    if result["success"]:
-        short = result['short_url']
-        keyboard = [[InlineKeyboardButton("🌐 Open in Browser", url=short)]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(f"✅ Shortened link:\n{short}", reply_markup=reply_markup)
+        # If not Adrino link, create short link
+        await update.message.reply_text("🔗 Generating Adrino short link... ⏳")
+        result = shorten_url(text)
+        if result["success"]:
+            short = result["short_url"]
+            keyboard = [[InlineKeyboardButton("🌐 Open Link", url=short)]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                f"✅ Shortened link:\n{short}\n\n📢 Normal users will see ads. Premium users get direct access.",
+                reply_markup=reply_markup
+            )
+        else:
+            await update.message.reply_text(f"⚠️ Error: {result['error']}")
     else:
-        await update.message.reply_text(f"⚠️ Error: {result['error']}")
+        await update.message.reply_text("Please send a valid URL starting with http:// or https://")
 
 # ---------------- Main ----------------
 def main():
     init_db()
-    cleanup_expired_users()  # Ensure DB clean at start
+    cleanup_expired_users()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("premium", premium_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("🚀 AdrinoLinks Shortener Bot with Premium System is running...")
+    print("🚀 AdrinoLinks Premium Bypass Bot is running...")
     app.run_polling()
 
 if __name__ == "__main__":
